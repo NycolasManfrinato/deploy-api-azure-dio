@@ -1,0 +1,60 @@
+name: CI/CD - Build, Test e Deploy da API no Azure
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  DOTNET_VERSION: "8.0.x"
+  IMAGE_NAME: dio-weather-api
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Instalar .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Restaurar dependencias (dotnet restore)
+        run: dotnet restore
+
+      - name: Build em Release (dotnet build)
+        run: dotnet build --configuration Release --no-restore
+
+      # - name: Testes automatizados (dotnet test)
+      #   run: dotnet test --no-build --configuration Release
+
+  build-and-push-image:
+    needs: build-and-test
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push'
+    steps:
+      - name: Checkout do codigo
+        uses: actions/checkout@v4
+
+      - name: Login no Azure Container Registry (ACR)
+        uses: azure/docker-login@v2
+        with:
+          login-server: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build e push da imagem Docker (tag versionada, nunca "latest")
+        run: |
+          IMAGE_TAG="${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}"
+          docker build -t "$IMAGE_TAG" .
+          docker push "$IMAGE_TAG"
+          echo "IMAGE_TAG=$IMAGE_TAG" >> "$GITHUB_ENV"
+
+      - name: Deploy no Azure Web App for Containers (zero downtime)
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          publish-profile: ${{ secrets.AZURE_WEBAPP_PUBLISH_PROFILE }}
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/${{ env.IMAGE_NAME }}:${{ github.run_number }}
